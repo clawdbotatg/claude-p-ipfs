@@ -1,0 +1,59 @@
+#!/bin/sh
+# ipfs — mirror module artifacts to IPFS via bgipfs (BuidlGuidl IPFS).
+#
+#   ipfs setup                     npm-install bgipfs INTO THIS FOLDER + config
+#   ipfs upload PATH               upload a file/dir → prints the CID
+#   ipfs url CID                   gateway URL for a CID
+#   ipfs mirror MODULE_NAME        tar a module at its pinned SHA and upload;
+#                                  prints the CID to put in modules.lock (cid=…)
+#
+# Deps live in this folder (node_modules — gitignored), never in the engine.
+# Credentials: `bgipfs upload config init` stores them in ~/.bgipfs/ — get an
+# API key from bgipfs.com account settings. Degrades loudly, never silently.
+set -e
+DIR="$(cd "$(dirname "$0")" && pwd)"
+HOME_DIR="${CLAUDE_P_AGENT_HOME:-$(cd "$DIR/../.." && pwd)}"
+BG="$DIR/node_modules/.bin/bgipfs"
+GATEWAY="ipfs.community.bgipfs.com"
+
+need_bg() {
+    [ -x "$BG" ] || {
+        echo "ipfs: bgipfs not installed here — run: $0 setup" >&2
+        exit 1
+    }
+}
+
+case "$1" in
+setup)
+    command -v npm >/dev/null || { echo "ipfs: npm not found" >&2; exit 1; }
+    npm install --prefix "$DIR" --no-fund --no-audit bgipfs
+    echo "ipfs: installed. Now configure credentials (API key from bgipfs.com):"
+    echo "  $BG upload config init"
+    ;;
+upload)
+    need_bg
+    [ -n "$2" ] || { echo "usage: ipfs upload PATH" >&2; exit 1; }
+    "$BG" upload "$2"
+    ;;
+url)
+    [ -n "$2" ] || { echo "usage: ipfs url CID" >&2; exit 1; }
+    echo "https://$2.$GATEWAY/"
+    ;;
+mirror)
+    need_bg
+    [ -n "$2" ] || { echo "usage: ipfs mirror MODULE_NAME" >&2; exit 1; }
+    MOD="$HOME_DIR/modules/$2"
+    [ -d "$MOD/.git" ] || { echo "ipfs: no module repo at $MOD" >&2; exit 1; }
+    SHA=$(git -C "$MOD" rev-parse HEAD)
+    TAR="$DIR/$2-$SHA.tar"
+    git -C "$MOD" archive --format=tar -o "$TAR" HEAD
+    echo "ipfs: uploading $2 @ $SHA"
+    "$BG" upload "$TAR"
+    rm -f "$TAR"
+    echo "ipfs: add the printed CID to modules.lock as cid=… on the $2 line"
+    ;;
+*)
+    sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'
+    exit 2
+    ;;
+esac
